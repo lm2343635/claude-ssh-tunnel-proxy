@@ -1,0 +1,40 @@
+#!/bin/bash
+
+INSTALL_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
+
+case "${1}" in
+    start)
+        bash "${INSTALL_DIR}/start.sh"
+        ;;
+    stop)
+        bash "${INSTALL_DIR}/stop.sh"
+        ;;
+    status)
+        source "${INSTALL_DIR}/.env"
+        if curl -s --max-time 3 -x http://127.0.0.1:${HTTP_PROXY_PORT} \
+            https://api.ipify.org 2>/dev/null | grep -qE "[0-9]+\.[0-9]+"; then
+            echo "Proxy is running (exit IP: $(curl -s --max-time 3 -x http://127.0.0.1:${HTTP_PROXY_PORT} https://api.ipify.org 2>/dev/null))"
+        else
+            echo "Proxy is not running"
+        fi
+        ;;
+    socks-on)
+        source "${INSTALL_DIR}/.env"
+        sudo networksetup -setsocksfirewallproxy "${NETWORK_SERVICE}" 127.0.0.1 "${SOCKS_PORT}"
+        sudo networksetup -setsocksfirewallproxystate "${NETWORK_SERVICE}" on
+        echo "macOS SOCKS proxy enabled on ${NETWORK_SERVICE} (127.0.0.1:${SOCKS_PORT})"
+        ;;
+    socks-off)
+        source "${INSTALL_DIR}/.env"
+        sudo networksetup -setsocksfirewallproxystate "${NETWORK_SERVICE}" off
+        echo "macOS SOCKS proxy disabled on ${NETWORK_SERVICE}"
+        ;;
+    log|logs)
+        source "${INSTALL_DIR}/.env"
+        tail -f "${LOG_FILE}"
+        ;;
+    *)
+        echo "Usage: proxy {start|stop|status|socks-on|socks-off|log}"
+        exit 1
+        ;;
+esac
