@@ -27,7 +27,7 @@ LOG_FILE="/tmp/ssh-tunnel.log"
 Please prepare the SSH server and setup SSH config before using this script.
 
 ```bash
-./install.sh
+make install.sh
 ```
 
 This symlinks the `proxy` command to `/usr/local/bin`, making it available system-wide.
