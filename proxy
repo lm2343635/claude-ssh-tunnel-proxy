@@ -18,23 +18,29 @@ case "${1}" in
             echo "Proxy is not running"
         fi
         ;;
-    socks-on)
+    socks-on|so)
         source "${INSTALL_DIR}/.env"
         sudo networksetup -setsocksfirewallproxy "${NETWORK_SERVICE}" 127.0.0.1 "${SOCKS_PORT}"
         sudo networksetup -setsocksfirewallproxystate "${NETWORK_SERVICE}" on
+        git config --global http.proxy socks5h://127.0.0.1:${SOCKS_PORT}
+        git config --global https.proxy socks5h://127.0.0.1:${SOCKS_PORT}
         echo "macOS SOCKS proxy enabled on ${NETWORK_SERVICE} (127.0.0.1:${SOCKS_PORT})"
+        echo "Git proxy configured (socks5h://127.0.0.1:${SOCKS_PORT})"
         ;;
-    socks-off)
+    socks-off|sf)
         source "${INSTALL_DIR}/.env"
         sudo networksetup -setsocksfirewallproxystate "${NETWORK_SERVICE}" off
+        git config --global --unset http.proxy
+        git config --global --unset https.proxy
         echo "macOS SOCKS proxy disabled on ${NETWORK_SERVICE}"
+        echo "Git proxy configuration removed"
         ;;
     log|logs)
         source "${INSTALL_DIR}/.env"
         tail -f "${LOG_FILE}"
         ;;
     *)
-        echo "Usage: proxy {start|stop|status|socks-on|socks-off|log}"
+        echo "Usage: proxy {start|stop|status|socks-on(so)|socks-off(sf)|log}"
         exit 1
         ;;
 esac

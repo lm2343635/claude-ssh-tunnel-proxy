@@ -39,8 +39,8 @@ proxy start    # Start the tunnel
 proxy stop     # Stop the tunnel
 proxy status   # Check if the tunnel is running
 proxy log      # View logs
-proxy socks-on   # Enable macOS SOCKS proxy (routes system traffic through tunnel)
-proxy socks-off  # Disable macOS SOCKS proxy
+proxy socks-on   # Enable macOS SOCKS proxy and git proxy (alias: proxy so)
+proxy socks-off  # Disable macOS SOCKS proxy and git proxy (alias: proxy sf)
 ```
 
 Set `NETWORK_SERVICE` in `.env` to match your network interface (default: `Wi-Fi`).
