@@ -35,12 +35,13 @@ This symlinks the `proxy` command to `/usr/local/bin`, making it available syste
 ## Usage
 
 ```bash
-proxy start    # Start the tunnel
-proxy stop     # Stop the tunnel
-proxy status   # Check if the tunnel is running
-proxy log      # View logs
-proxy socks-on   # Enable macOS SOCKS proxy and git proxy (alias: proxy so)
-proxy socks-off  # Disable macOS SOCKS proxy and git proxy (alias: proxy sf)
+proxy start            # Start the tunnel
+proxy start --always   # Start with auto-reconnect watchdog (checks every 30s)
+proxy stop             # Stop the tunnel (also stops the watchdog)
+proxy status           # Check if the tunnel is running
+proxy log              # View logs
+proxy socks-on         # Enable macOS SOCKS proxy and git proxy (alias: proxy so)
+proxy socks-off        # Disable macOS SOCKS proxy and git proxy (alias: proxy sf)
 ```
 
 Set `NETWORK_SERVICE` in `.env` to match your network interface (default: `Wi-Fi`).
@@ -65,3 +66,4 @@ Add proxy environment variables to your Claude Code settings at `~/.claude/setti
 2. Create a new SSH dynamic port forward (SOCKS5 proxy)
 3. Configure and restart Privoxy to convert SOCKS5 to HTTP
 4. Run a health check to verify the tunnel is working
+5. With `--always`, spawn a background watchdog that probes the tunnel every 30s and reconnects if it drops

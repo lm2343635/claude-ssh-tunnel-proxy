@@ -4,7 +4,7 @@ INSTALL_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>
 
 case "${1}" in
     start)
-        bash "${INSTALL_DIR}/start.sh"
+        bash "${INSTALL_DIR}/start.sh" "${2}"
         ;;
     stop)
         bash "${INSTALL_DIR}/stop.sh"
@@ -40,7 +40,7 @@ case "${1}" in
         tail -f "${LOG_FILE}"
         ;;
     *)
-        echo "Usage: proxy {start|stop|status|socks-on(so)|socks-off(sf)|log}"
+        echo "Usage: proxy {start [--always]|stop|status|socks-on(so)|socks-off(sf)|log}"
         exit 1
         ;;
 esac
