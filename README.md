@@ -29,7 +29,7 @@ and signs a DMG at `build/TunnelProxy-<version>.dmg` with an `/Applications`
 symlink for drag-install.
 
 ```bash
-./release.sh                       # signed DMG (not notarized)
+./release.sh                      # signed DMG (not notarized)
 ```
 
 To notarize + staple (needed for other Macs to open it without Gatekeeper
@@ -47,7 +47,7 @@ NOTARY_PROFILE=TunnelProxyNotary ./release.sh
 ```
 
 (Or pass `NOTARY_APPLE_ID` / `NOTARY_TEAM_ID` / `NOTARY_PASSWORD` directly.) An
-app-specific password is created at <https://appleid.apple.com> → Sign-In &
+app-specific password is created at [https://appleid.apple.com](https://appleid.apple.com) → Sign-In &
 Security → App-Specific Passwords.
 
 The app, bundled privoxy binary, and dylibs are all signed with a secure
@@ -74,11 +74,11 @@ All SSH connection data is owned by the app — nothing is shared with the CLI o
 read from `~/.ssh/config` (unless a profile opts into agent/default-key auth).
 Each server profile supports one of three auth methods:
 
-| Method | What it needs | Secret storage |
-|--------|---------------|----------------|
-| Default keys / agent | nothing (uses ssh-agent / default keys) | — |
-| Private key file | path to a key; optional passphrase | passphrase in Keychain |
-| Password | the SSH password | password in Keychain |
+| Method               | What it needs                           | Secret storage         |
+| -------------------- | --------------------------------------- | ---------------------- |
+| Default keys / agent | nothing (uses ssh-agent / default keys) | —                     |
+| Private key file     | path to a key; optional passphrase      | passphrase in Keychain |
+| Password             | the SSH password                        | password in Keychain   |
 
 Passwords and key passphrases are stored in the **macOS Keychain** (service
 `com.monstarlab.tunnelproxy`, keyed by the profile's UUID) — never in
@@ -92,11 +92,11 @@ The secret is passed via the environment, never argv, so it never appears in `ps
 
 Everything the app writes lives in `~/Library/Application Support/TunnelProxy/`:
 
-| File | Purpose |
-|------|---------|
-| `config.json` | user configuration |
-| `tunnel.log` | ssh + privoxy output and status messages |
-| `privoxy.conf` | generated fresh on each connect |
+| File             | Purpose                                  |
+| ---------------- | ---------------------------------------- |
+| `config.json`  | user configuration                       |
+| `tunnel.log`   | ssh + privoxy output and status messages |
+| `privoxy.conf` | generated fresh on each connect          |
 
 ## Self-contained runtime
 

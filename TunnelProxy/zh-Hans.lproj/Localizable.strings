@@ -172,6 +172,7 @@
 
 /* Redesign — Menu Bar */
 "Show menu bar icon" = "显示菜单栏图标";
+"Show status on Dock icon" = "在程序坞图标上显示状态";
 "Menu Bar" = "菜单栏";
 
 /* Redesign — Tools tab */

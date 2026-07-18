@@ -39,6 +39,7 @@ final class TunnelController: ObservableObject {
             updateBlink()
             syncRecorderState()
             syncLatencyProbing()
+            updateDockIcon()
         }
     }
     @Published private(set) var exitIP: String?
@@ -91,6 +92,14 @@ final class TunnelController: ObservableObject {
             syncSampling()
         }
     }
+    /// Reflect the connection state on the Dock icon (tint + status badge) while
+    /// the main window is open. When off, the Dock shows the plain bundle icon.
+    @Published var showDockStateIcon: Bool {
+        didSet {
+            defaults.set(showDockStateIcon, forKey: Keys.showDockStateIcon)
+            updateDockIcon()
+        }
+    }
     /// Record traffic statistics (byte volume over time) while connected.
     @Published var recordStats: Bool {
         didSet {
@@ -137,6 +146,7 @@ final class TunnelController: ObservableObject {
         static let recordStats = "recordStats"
         static let systemSocks = "systemSocksOn"
         static let showMenuBarIcon = "showMenuBarIcon"
+        static let showDockStateIcon = "showDockStateIcon"
     }
 
     init() {
@@ -148,6 +158,7 @@ final class TunnelController: ObservableObject {
         recordStats = defaults.object(forKey: Keys.recordStats) as? Bool ?? true
         systemSocksOn = defaults.bool(forKey: Keys.systemSocks)
         showMenuBarIconStore = defaults.object(forKey: Keys.showMenuBarIcon) as? Bool ?? true
+        showDockStateIcon = defaults.object(forKey: Keys.showDockStateIcon) as? Bool ?? true
         AppPaths.ensureSupportDirectory()
         recorder.isEnabled = recordStats
         recorder.attach(to: speedMonitor)
@@ -158,6 +169,8 @@ final class TunnelController: ObservableObject {
         }
         // Let the launch fallback reach us if the menu bar icon was hidden.
         AppDelegate.controller = self
+        // Reflect the initial (disconnected) state on the Dock tile if it's shown.
+        updateDockIcon()
     }
 
     /// Sampling (the 1 Hz TCP-table read) must run whenever we either show the
@@ -357,6 +370,25 @@ final class TunnelController: ObservableObject {
         blinkTimer?.invalidate()
         blinkTimer = nil
         iconDimmed = false
+    }
+
+    /// Paint the Dock tile to reflect the current connection state (tint + status
+    /// badge). Only matters while the main window is open — the app is
+    /// `LSUIElement` and shows a Dock icon only in `.regular` activation. Setting
+    /// `applicationIconImage` while `.accessory` is harmless (no tile), so we
+    /// don't gate on policy here; `AppActivation.becomeRegular()` re-invokes this
+    /// so a window opened mid-connection shows the right icon immediately.
+    ///
+    /// When the toggle is off, restore the plain bundle icon (loaded by name so
+    /// the default is always recoverable).
+    func updateDockIcon() {
+        if showDockStateIcon {
+            NSApp.applicationIconImage = DockIconRenderer.image(for: state)
+        } else {
+            // nil resets `applicationIconImage` to the app bundle's own icon.
+            NSApp.applicationIconImage = nil
+        }
+        NSApp.dockTile.display()
     }
 
     func saveConfig() {

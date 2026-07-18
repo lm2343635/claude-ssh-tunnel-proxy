@@ -41,6 +41,9 @@ struct UnifiedWindowView: View {
             }
             AppDelegate.openMainWindow = { openWindow(id: "main") }
             AppActivation.becomeRegular()
+            // The Dock tile only exists once we're `.regular`; paint it to the
+            // current state now so a window opened mid-connection isn't stale.
+            controller.updateDockIcon()
         }
         .onDisappear {
             AppActivation.becomeAccessory()

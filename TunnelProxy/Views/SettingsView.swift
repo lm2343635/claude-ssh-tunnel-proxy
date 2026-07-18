@@ -136,6 +136,7 @@ struct SettingsTab: View {
                 get: { controller.showMenuBarIcon },
                 set: { controller.showMenuBarIcon = $0 }))
             SettingsRow.toggle("Show network speed", $controller.showSpeed)
+            SettingsRow.toggle("Show status on Dock icon", $controller.showDockStateIcon)
         }
     }
 
