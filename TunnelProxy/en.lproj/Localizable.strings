@@ -134,6 +134,10 @@
 "SOCKS port must be 1–65535" = "SOCKS port must be 1–65535";
 "HTTP proxy port must be 1–65535" = "HTTP proxy port must be 1–65535";
 "Ports must differ" = "Ports must differ";
+"Watchdog interval must be at least 15 seconds" = "Watchdog interval must be at least 15 seconds";
+"Port %d is in use by %@" = "Port %d is in use by %@";
+"Port %d requires administrator access to release" = "Port %d requires administrator access to release";
+"Could not release port %d: %@" = "Could not release port %d: %@";
 "Watchdog interval must be positive" = "Watchdog interval must be positive";
 
 /* Redesign — sidebar / tabs */

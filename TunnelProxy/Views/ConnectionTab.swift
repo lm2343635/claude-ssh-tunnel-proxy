@@ -53,7 +53,11 @@ private struct HeroTile: View {
     var body: some View {
         Tile(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20),
              fill: AnyShapeStyle(controller.isConnected ? DS.heroGradient : DS.heroGradientNeutral)) {
-            HStack(spacing: 20) {
+            // Keep only the designed 20 pt gap between the ring and copy. A
+            // spaced HStack also adds spacing on both sides of its Spacer,
+            // which made this row wider than the app's 780 pt minimum window
+            // and caused the entire window content to be clipped at both edges.
+            HStack(spacing: 0) {
                 PowerRing(size: 84, ringWidth: 8)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -69,6 +73,7 @@ private struct HeroTile: View {
                         .truncationMode(.tail)
                     chips.padding(.top, 8)
                 }
+                .padding(.leading, 20)
                 .layoutPriority(1)
 
                 Spacer(minLength: 8)

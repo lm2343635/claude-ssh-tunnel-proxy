@@ -134,6 +134,10 @@
 "SOCKS port must be 1–65535" = "SOCKS 端口必须为 1–65535";
 "HTTP proxy port must be 1–65535" = "HTTP 代理端口必须为 1–65535";
 "Ports must differ" = "两个端口不能相同";
+"Watchdog interval must be at least 15 seconds" = "Watchdog 间隔不能少于 15 秒";
+"Port %d is in use by %@" = "端口 %d 正被 %@ 占用";
+"Port %d requires administrator access to release" = "释放端口 %d 需要管理员权限";
+"Could not release port %d: %@" = "无法释放端口 %d：%@";
 "Watchdog interval must be positive" = "守护进程间隔必须为正数";
 
 /* Redesign — sidebar / tabs */

@@ -4,6 +4,9 @@ import Foundation
 /// SSH server profiles plus app-global tunnel settings. Secrets are NOT stored
 /// here — they live in the Keychain (see `KeychainStore`).
 struct TunnelConfig: Codable, Equatable {
+    static let minimumWatchdogInterval = 15
+    static let defaultWatchdogInterval = 30
+
     var servers: [ServerProfile] = []
     /// The currently selected server's id.
     var selectedServerID: UUID?
@@ -14,7 +17,7 @@ struct TunnelConfig: Codable, Equatable {
     /// Empty by default; the UI fills this with the primary (default-route)
     /// network service on first open.
     var networkService: String = ""
-    var watchdogInterval: Int = 15
+    var watchdogInterval: Int = Self.defaultWatchdogInterval
 
     // MARK: - Server helpers
 
@@ -44,8 +47,15 @@ struct TunnelConfig: Codable, Equatable {
 
     static func load() -> TunnelConfig {
         guard let data = try? Data(contentsOf: AppPaths.configURL),
-              let config = try? JSONDecoder().decode(TunnelConfig.self, from: data) else {
+              var config = try? JSONDecoder().decode(TunnelConfig.self, from: data) else {
             return TunnelConfig()
+        }
+        // Older builds allowed very short watchdog intervals. Those intervals
+        // amplified a brief DNS outage into a tight probe/reconnect loop, so
+        // migrate existing values to the supported floor once on load.
+        if config.watchdogInterval < minimumWatchdogInterval {
+            config.watchdogInterval = minimumWatchdogInterval
+            try? config.save()
         }
         return config
     }
@@ -67,7 +77,9 @@ struct TunnelConfig: Codable, Equatable {
         guard (1...65535).contains(socksPort) else { return String(localized: "SOCKS port must be 1–65535") }
         guard (1...65535).contains(httpProxyPort) else { return String(localized: "HTTP proxy port must be 1–65535") }
         if socksPort == httpProxyPort { return String(localized: "Ports must differ") }
-        if watchdogInterval <= 0 { return String(localized: "Watchdog interval must be positive") }
+        if watchdogInterval < Self.minimumWatchdogInterval {
+            return String(localized: "Watchdog interval must be at least 15 seconds")
+        }
         return nil
     }
 

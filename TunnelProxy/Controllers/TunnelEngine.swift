@@ -34,6 +34,12 @@ actor TunnelEngine {
     private let sshPath = "/usr/bin/ssh"
     private let curlPath = "/usr/bin/curl"
 
+    // Watchdog state. Public HTTP probes are telemetry only; SSH process and
+    // listener ownership are the authoritative liveness signals.
+    private var consecutiveProbeFailures = 0
+    private var reconnectAttempt = 0
+    private var nextReconnectAt = Date.distantPast
+
     // MARK: - Lifecycle
 
     /// Start (or restart) the full pipeline for a given server. The secret, when
@@ -55,8 +61,13 @@ actor TunnelEngine {
         let health = await checkHealth()
         switch health {
         case .proxyOK: log("Tunnel + proxy started successfully")
-        case .tunnelOnly: log("Tunnel OK but proxy failed")
-        case .down: log("Tunnel failed to start")
+        case .tunnelOnly:
+            await describeForeignListener(on: config.httpProxyPort, expected: privoxyProcess)
+            log("Tunnel OK but owned proxy failed")
+        case .down:
+            await describeForeignListener(on: config.socksPort, expected: sshProcess)
+            await describeForeignListener(on: config.httpProxyPort, expected: privoxyProcess)
+            log("Tunnel failed to start")
         }
 
         // Only arm the watchdog when something actually came up. Arming it on a
@@ -204,25 +215,32 @@ actor TunnelEngine {
 
     // MARK: - Health checks
 
-    /// Probe the pipeline. Mirrors the scripts' curl checks.
+    /// Probe local pipeline ownership. Public endpoints are deliberately not
+    /// part of this health decision: a DNS/API outage must not make us tear down
+    /// an otherwise healthy SSH session.
     func checkHealth() async -> Health {
-        // HTTP proxy end-to-end: expect an auth error body from Anthropic.
-        if let out = await curl([
-            "-s", "--max-time", "5",
-            "-x", "http://127.0.0.1:\(config.httpProxyPort)",
-            "https://api.anthropic.com/v1/models",
-        ]), out.contains("authentication_error") {
-            return .proxyOK
+        guard await processOwnsListener(sshProcess, port: config.socksPort) else {
+            return .down
         }
-        // SOCKS-only: can we resolve an exit IP through the tunnel?
-        if let out = await curl([
-            "-s", "--max-time", "5",
-            "--socks5-hostname", "127.0.0.1:\(config.socksPort)",
-            "https://api.ipify.org",
-        ]), out.range(of: #"\d+\.\d+"#, options: .regularExpression) != nil {
-            return .tunnelOnly
-        }
-        return .down
+        return await processOwnsListener(privoxyProcess, port: config.httpProxyPort)
+            ? .proxyOK : .tunnelOnly
+    }
+
+    /// A process merely being alive is not enough: a launchd-managed Homebrew
+    /// Privoxy can race our bundled child for the same port. Require the listener
+    /// PID to be the exact child this engine launched.
+    private func processOwnsListener(_ process: Process?, port: Int) async -> Bool {
+        guard let process, process.isRunning else { return false }
+        let pid = process.processIdentifier
+        let holder = await Task.detached { PortInspector.holder(ofPort: port) }.value
+        return holder?.pid == pid
+    }
+
+    private func describeForeignListener(on port: Int, expected: Process?) async {
+        let expectedPID = expected?.processIdentifier
+        let holder = await Task.detached { PortInspector.holder(ofPort: port) }.value
+        guard let holder, holder.pid != expectedPID else { return }
+        log("Port \(port) is owned by \(holder.command) (PID \(holder.pid), \(holder.path)); refusing to treat it as our proxy")
     }
 
     /// Fetch the current exit IP through the HTTP proxy, or nil if unreachable.
@@ -311,7 +329,11 @@ actor TunnelEngine {
 
     private func startWatchdog() {
         stopWatchdog()
-        let interval = UInt64(max(1, config.watchdogInterval)) * 1_000_000_000
+        consecutiveProbeFailures = 0
+        reconnectAttempt = 0
+        nextReconnectAt = .distantPast
+        let seconds = max(TunnelConfig.minimumWatchdogInterval, config.watchdogInterval)
+        let interval = UInt64(seconds) * 1_000_000_000
         watchdogTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
@@ -320,47 +342,77 @@ actor TunnelEngine {
                 await self.watchdogTick()
             }
         }
-        log("Watchdog started (every \(config.watchdogInterval)s)")
+        log("Watchdog started (every \(seconds)s)")
     }
 
-    /// Consecutive failed SOCKS probes. On a lossy carrier link a *single* probe
-    /// can fail from transient packet loss while the tunnel is actually fine; hard-
-    /// reconnecting on one miss is what makes the proxy feel like it "drops every
-    /// minute". Require two misses in a row before tearing ssh down.
-    private var consecutiveProbeFailures = 0
-
     private func watchdogTick() async {
-        // Probe SOCKS directly; if it's down, consider relaunching ssh.
-        let ok = await socksProbeOK()
-        if ok {
-            consecutiveProbeFailures = 0
-            return
-        }
-        consecutiveProbeFailures += 1
-        if consecutiveProbeFailures < 2 {
-            log("Watchdog probe missed (\(consecutiveProbeFailures)/2) — waiting for confirmation")
+        // OpenSSH's ServerAliveInterval/ServerAliveCountMax is responsible for
+        // deciding whether the remote transport is dead. Restart immediately
+        // only when that child has exited; a public DNS/API miss is not proof.
+        guard sshProcess?.isRunning == true else {
+            await reconnectSSH(reason: "SSH process exited")
             return
         }
 
-        // The SOCKS probe can't tell "our tunnel died" from "a foreign process is
-        // squatting on the port" — both fail identically. Before relaunching, ask
-        // who holds the port. If a *foreign* process holds it, relaunching would
-        // just spin (`bind: Address already in use`), so stop instead of looping.
         let port = config.socksPort
         let ourPID = sshProcess?.processIdentifier
         let holder = await Task.detached { PortInspector.holder(ofPort: port) }.value
-        if let holder {
-            // Reconnect-race guard: our own live/expected ssh child is not foreign.
-            let isOurLiveChild = (ourPID != nil && holder.pid == ourPID)
-            if !holder.isOurs && !isOurLiveChild {
-                log("Tunnel down, but port \(port) is held by “\(holder.command)” (PID \(holder.pid)) — not reconnecting")
+        guard let holder, holder.pid == ourPID else {
+            if let holder {
+                log("SOCKS port \(port) is held by \(holder.command) (PID \(holder.pid)), not our SSH child — watchdog paused")
                 stopWatchdog()
-                return
+            } else {
+                await reconnectSSH(reason: "SSH child is not listening on port \(port)")
+            }
+            return
+        }
+
+        if reconnectAttempt > 0 {
+            reconnectAttempt = 0
+            nextReconnectAt = .distantPast
+            log("SSH tunnel recovered after delayed startup")
+        }
+
+        // End-to-end reachability remains useful diagnostics, but it never tears
+        // down SSH. This avoids a single ipify/DNS outage creating a reconnect
+        // storm on otherwise healthy carrier links.
+        if await socksProbeOK() {
+            if consecutiveProbeFailures > 0 {
+                log("End-to-end probe recovered after \(consecutiveProbeFailures) miss(es)")
+            }
+            consecutiveProbeFailures = 0
+        } else {
+            consecutiveProbeFailures += 1
+            if consecutiveProbeFailures == 1 || consecutiveProbeFailures % 4 == 0 {
+                log("End-to-end probe unavailable (\(consecutiveProbeFailures) consecutive); SSH remains up")
             }
         }
-        log("Tunnel down, reconnecting…")
+    }
+
+    private func reconnectSSH(reason: String) async {
+        let now = Date()
+        guard now >= nextReconnectAt else { return }
+
+        reconnectAttempt += 1
+        log("\(reason); reconnecting SSH (attempt \(reconnectAttempt))…")
         startSSH()
-        consecutiveProbeFailures = 0
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        if await processOwnsListener(sshProcess, port: config.socksPort) {
+            reconnectAttempt = 0
+            nextReconnectAt = .distantPast
+            consecutiveProbeFailures = 0
+            log("SSH tunnel recovered")
+            return
+        }
+
+        // Avoid DNS failures or an unavailable carrier link becoming a tight
+        // process-spawn loop. The watchdog tick may be slower than this delay;
+        // the date gate still guarantees the configured minimum backoff.
+        let delays: [TimeInterval] = [5, 15, 30, 60]
+        let delay = delays[min(reconnectAttempt - 1, delays.count - 1)]
+        nextReconnectAt = Date().addingTimeInterval(delay)
+        log("SSH reconnect failed; next attempt in at least \(Int(delay))s")
     }
 
     /// One SOCKS liveness probe through the tunnel. Short timeout so a stalled
@@ -396,35 +448,86 @@ actor TunnelEngine {
 
     /// Append a child's stdout/stderr into the shared log file.
     private func redirectOutput(of process: Process, tag: String) {
-        AppPaths.ensureSupportDirectory()
-        let logPath = AppPaths.logURL.path
-        if !FileManager.default.fileExists(atPath: logPath) {
-            FileManager.default.createFile(atPath: logPath, contents: nil)
+        let pipe = Pipe()
+        let streamID = UUID()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                TunnelLog.flush(streamID: streamID, tag: tag)
+            } else {
+                TunnelLog.appendChildData(data, streamID: streamID, tag: tag)
+            }
         }
-        guard let handle = try? FileHandle(forWritingTo: AppPaths.logURL) else { return }
-        handle.seekToEndOfFile()
-        process.standardOutput = handle
-        process.standardError = handle
     }
 
     // MARK: - Logging
 
     nonisolated func log(_ message: String) {
-        let line = "\(Self.timestamp())  \(message)\n"
-        AppPaths.ensureSupportDirectory()
-        let url = AppPaths.logURL
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(line.data(using: .utf8) ?? Data())
-            try? handle.close()
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
+        TunnelLog.append(message)
+    }
+}
+
+/// Serial, append-only writer shared by engine events and child-process output.
+/// The previous implementation kept several independently seeked file handles;
+/// concurrent SSH/Privoxy/app writes could overwrite or splice each other.
+private enum TunnelLog {
+    private static let queue = DispatchQueue(label: "TunnelProxy.tunnel-log")
+    private static var childBuffers: [UUID: Data] = [:]
+
+    static func append(_ message: String) {
+        queue.async { writeLine(message) }
+    }
+
+    static func appendChildData(_ data: Data, streamID: UUID, tag: String) {
+        queue.async {
+            var buffer = childBuffers[streamID, default: Data()]
+            buffer.append(data)
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let lineData = buffer[..<newline]
+                buffer.removeSubrange(...newline)
+                let line = String(decoding: lineData, as: UTF8.self)
+                    .trimmingCharacters(in: .newlines)
+                if !line.isEmpty { writeLine("[\(tag)] \(line)") }
+            }
+            childBuffers[streamID] = buffer
         }
     }
 
-    nonisolated private static func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f.string(from: Date())
+    static func flush(streamID: UUID, tag: String) {
+        queue.async {
+            if let remainder = childBuffers.removeValue(forKey: streamID), !remainder.isEmpty {
+                let line = String(decoding: remainder, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !line.isEmpty { writeLine("[\(tag)] \(line)") }
+            }
+        }
+    }
+
+    private static func writeLine(_ message: String) {
+        AppPaths.ensureSupportDirectory()
+        let line = "\(timestamp())  \(message)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        let fd = Darwin.open(AppPaths.logURL.path, O_WRONLY | O_CREAT | O_APPEND,
+                             mode_t(S_IRUSR | S_IWUSR))
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let count = Darwin.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+                if count <= 0 { break }
+                offset += count
+            }
+        }
+    }
+
+    private static func timestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: Date())
     }
 }

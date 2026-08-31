@@ -271,8 +271,9 @@ final class TunnelController: ObservableObject {
                                       options: .regularExpression) != nil
             }.value
             guard enabled else { return }
-            // Only clear it if there's no live tunnel behind the proxy.
-            let tunnelUp = await self.engine.exitIP() != nil
+            // Only clear it if there is no app-owned local tunnel. Exit-IP is
+            // telemetry: an ipify/DNS outage must not masquerade as tunnel death.
+            let tunnelUp = await self.engine.checkHealth() != .down
             if !tunnelUp {
                 await self.applySystemSocks(on: false)
             }
@@ -412,12 +413,14 @@ final class TunnelController: ObservableObject {
         state = .connecting
         defer { isBusy = false }
 
-        // Preflight: silently reclaim the SOCKS / HTTP-proxy ports before spawning
-        // any child. A stale ssh/privoxy (or another app) holding a port would
-        // otherwise make the tunnel fail to bind and the watchdog spin. Force-quit
-        // whoever is listening (SIGTERM → SIGKILL); a root-owned holder we can't
-        // kill just surfaces as the usual "failed to start" error afterwards.
-        await reclaimPorts()
+        // Reclaim only stale processes of the same kinds this app launches. A
+        // foreign listener (notably launchd-managed Homebrew Privoxy) is reported
+        // instead of killed: launchd would immediately restart it and race the
+        // bundled child forever.
+        if let conflict = await reclaimPorts() {
+            state = .error(conflict)
+            return
+        }
 
         // Retrieve the secret for auth methods that need one.
         let secret: String? = (server.authMethod == .agent) ? nil : KeychainStore.secret(for: server.id)
@@ -437,15 +440,29 @@ final class TunnelController: ObservableObject {
         await updateExitIP()
     }
 
-    /// Force-quit any process listening on the SOCKS or HTTP-proxy port so the
-    /// tunnel can bind them. Runs the `lsof`/`kill` work off the MainActor.
-    private func reclaimPorts() async {
+    /// Reclaim stale app-kind listeners, or return a user-facing conflict for a
+    /// foreign/root-owned process. Runs `lsof`/`kill` off the MainActor.
+    private func reclaimPorts() async -> String? {
         let ports = [config.socksPort, config.httpProxyPort]
-        await Task.detached {
+        return await Task.detached {
             for port in ports {
                 guard let holder = PortInspector.holder(ofPort: port) else { continue }
-                _ = PortInspector.forceQuit(pid: holder.pid)
+                guard holder.isOurs else {
+                    return String.localizedStringWithFormat(
+                        String(localized: "Port %d is in use by %@"),
+                        port, holder.command)
+                }
+                switch PortInspector.forceQuit(pid: holder.pid) {
+                case .freed: continue
+                case .needsAdmin:
+                    return String.localizedStringWithFormat(
+                        String(localized: "Port %d requires administrator access to release"), port)
+                case .failed(let reason):
+                    return String.localizedStringWithFormat(
+                        String(localized: "Could not release port %d: %@"), port, reason)
+                }
             }
+            return nil
         }.value
     }
 
@@ -462,23 +479,33 @@ final class TunnelController: ObservableObject {
         exitIP = nil
     }
 
-    /// Poll health + exit IP without blocking the UI.
+    /// Poll app-owned process/listener health + optional exit IP without blocking
+    /// the UI. Public exit-IP lookup is telemetry, not the connection state.
     func refreshStatus() {
         guard !isBusy else { return }
         Task {
-            let ip = await engine.exitIP()
-            if let ip {
+            let health = await engine.checkHealth()
+            let ip: String?
+            if health == .down {
+                ip = nil
+            } else {
+                ip = await engine.exitIP()
+            }
+            switch health {
+            case .proxyOK:
                 self.exitIP = ip
                 if case .connected = self.state {} else {
                     self.state = .connected
                     if self.lastConnected == nil { self.lastConnected = Date() }
                 }
-            } else {
+            case .tunnelOnly:
+                self.exitIP = nil
+                self.state = .error(String(localized: "Tunnel OK but proxy failed"))
+            case .down:
+                self.exitIP = nil
                 switch self.state {
                 case .connecting, .reconnecting: break
-                default:
-                    self.state = .disconnected
-                    self.exitIP = nil
+                default: self.state = .disconnected
                 }
             }
         }

@@ -335,7 +335,11 @@ struct PowerRing: View {
                             .foregroundStyle(glyphColor))
                     .shadow(color: .black.opacity(0.10), radius: 3, y: 2)
             }
-            .frame(width: size * 1.28, height: size * 1.28)
+            // The glow is intentionally allowed to draw beyond the control,
+            // but it must not participate in layout. Treating the 128% glow
+            // diameter as the button's intrinsic size made the hero row wider
+            // than the minimum window even though the visible ring is 84 pt.
+            .frame(width: size, height: size)
             .contentShape(Circle())
             .scaleEffect(breathing)
         }

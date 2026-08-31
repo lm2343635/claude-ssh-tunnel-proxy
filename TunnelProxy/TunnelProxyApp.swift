@@ -29,7 +29,7 @@ struct TunnelProxyApp: App {
             UnifiedWindowView()
                 .environmentObject(controller)
         }
-        .defaultSize(width: 720, height: 620)
+        .defaultSize(width: 840, height: 580)
         .windowResizability(.contentMinSize)
         // Calendar-app style: no title strip; the tab picker lives in the
         // titlebar toolbar, so there's a single unified surface up top.
